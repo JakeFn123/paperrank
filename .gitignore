@@ -5,3 +5,4 @@ __pycache__/
 data/chroma/
 data/pdfs/
 .streamlit/
+.DS_Store
