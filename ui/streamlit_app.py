@@ -223,6 +223,30 @@ def _paper_match_fields(paper):
     return query_match_score, rerank_score, concept_hit_count, matched_concepts
 
 
+def _paper_key_reason(sp, query_match_score: float, rerank_score: float, concept_hit_count: int, matched_concepts: list[str]) -> str:
+    reasons: list[str] = []
+    if matched_concepts:
+        reasons.append(f"命中关键概念（{', '.join(matched_concepts[:2])}）")
+    elif concept_hit_count > 0:
+        reasons.append(f"命中 {concept_hit_count} 个核心概念")
+
+    if rerank_score >= 70:
+        reasons.append(f"重排相关性较高（Rerank {rerank_score:.1f}）")
+    elif query_match_score >= 2.5:
+        reasons.append(f"检索匹配分较高（Match {query_match_score:.2f}）")
+
+    content = float(getattr(sp.score, "content_relevance", 0.0) or 0.0)
+    method = float(getattr(sp.score, "method_relevance", 0.0) or 0.0)
+    if content >= method:
+        reasons.append(f"内容相关性更强（{content:.1f}/100）")
+    else:
+        reasons.append(f"方法相关性更强（{method:.1f}/100）")
+
+    if not reasons:
+        return "与当前研究问题语义接近，并通过综合评分筛选进入结果集。"
+    return "；".join(reasons) + "。"
+
+
 def _slot_values_to_text(values: list[str]) -> str:
     if not values:
         return ""
@@ -636,6 +660,7 @@ with tab_results:
 
             if matched_concepts:
                 st.caption("匹配概念：" + ", ".join(matched_concepts))
+            st.caption("Key Reason: " + _paper_key_reason(sp, query_match_score, rerank_score, concept_hit_count, matched_concepts))
             if raw_url and not safe_url:
                 st.caption("链接格式异常，已禁用跳转。")
 

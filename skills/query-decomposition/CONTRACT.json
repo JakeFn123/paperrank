@@ -1,0 +1,56 @@
+{
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["question", "locked_concepts", "forced_intent_slots"],
+    "properties": {
+      "question": {"type": "string", "minLength": 1},
+      "locked_concepts": {
+        "type": "array",
+        "items": {"type": "string"}
+      },
+      "forced_intent_slots": {
+        "type": "object",
+        "properties": {
+          "subject": {"type": "array", "items": {"type": "string"}},
+          "intervention": {"type": "array", "items": {"type": "string"}},
+          "outcome": {"type": "array", "items": {"type": "string"}},
+          "context": {"type": "array", "items": {"type": "string"}},
+          "evaluation": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      }
+    },
+    "additionalProperties": true
+  },
+  "output_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": [
+      "research_intent",
+      "intent_slots",
+      "sub_queries",
+      "hidden_assumptions",
+      "clarification_questions"
+    ],
+    "properties": {
+      "research_intent": {"type": "string", "minLength": 1},
+      "intent_slots": {
+        "type": "object",
+        "required": ["subject", "intervention", "outcome", "context", "evaluation"],
+        "properties": {
+          "subject": {"type": "array", "items": {"type": "string"}},
+          "intervention": {"type": "array", "items": {"type": "string"}},
+          "outcome": {"type": "array", "items": {"type": "string"}},
+          "context": {"type": "array", "items": {"type": "string"}},
+          "evaluation": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      },
+      "sub_queries": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+      "hidden_assumptions": {"type": "array", "items": {"type": "string"}},
+      "clarification_questions": {"type": "array", "items": {"type": "string"}}
+    },
+    "additionalProperties": true
+  }
+}

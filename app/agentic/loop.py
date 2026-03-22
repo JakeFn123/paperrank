@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from app.agentic.skills import SkillRegistry
+from app.agentic.skills import SkillContractError, SkillRegistry
 from app.agentic.subagents import PlannerSubAgent, RetrievalSubAgent, ScoringSubAgent, SynthesisSubAgent
 from app.agentic.tasks import TaskBoard
 from app.agentic.tools import ToolContext, build_paperrank_tool_registry
@@ -77,6 +77,29 @@ class PaperRankAgentLoop:
             }
         )
 
+    def _to_contract_payload(self, obj: Any) -> Any:
+        if obj is None or isinstance(obj, (str, int, float, bool)):
+            return obj
+        if isinstance(obj, dict):
+            return {str(k): self._to_contract_payload(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            return [self._to_contract_payload(x) for x in obj]
+        if hasattr(obj, "model_dump"):
+            try:
+                return self._to_contract_payload(obj.model_dump())
+            except Exception:
+                pass
+        return str(obj)
+
+    def _validate_skill(self, name: str, phase: str, payload: dict[str, Any]) -> None:
+        try:
+            if phase == "input":
+                self.skills.validate_input(name, payload)
+            else:
+                self.skills.validate_output(name, payload)
+        except SkillContractError as exc:
+            raise RuntimeError(str(exc)) from exc
+
     async def run(self, question: str, options: LoopOptions | None = None) -> AgentOutput:
         options = options or LoopOptions()
         locked = options.locked_concepts or []
@@ -141,6 +164,15 @@ class PaperRankAgentLoop:
 
         # 1) Planner
         self.task_board.update(plan_task.id, status="in_progress")
+        self._validate_skill(
+            "query-decomposition",
+            "input",
+            {
+                "question": question,
+                "locked_concepts": locked,
+                "forced_intent_slots": options.intent_slots_override or {},
+            },
+        )
         plan_result = self.planner.run(
             question=question,
             locked_concepts=locked,
@@ -148,6 +180,7 @@ class PaperRankAgentLoop:
             intent_slots_override=options.intent_slots_override or {},
         )
         plan = plan_result.payload
+        self._validate_skill("query-decomposition", "output", self._to_contract_payload(plan))
         self.task_board.update(plan_task.id, status="completed", result_summary=plan_result.notes)
         self._trace(
             traces,
@@ -162,6 +195,18 @@ class PaperRankAgentLoop:
 
         # 2) Retriever
         self.task_board.update(retrieval_task.id, status="in_progress")
+        self._validate_skill(
+            "academic-retrieval",
+            "input",
+            {
+                "question": question,
+                "sub_queries": plan.sub_queries,
+                "source": options.source,
+                "per_query_limit": options.per_query_limit,
+                "max_papers": options.max_papers,
+                "locked_concepts": locked,
+            },
+        )
         retrieval_result = await self.retriever.run(
             tools=self.tools,
             question=question,
@@ -173,6 +218,11 @@ class PaperRankAgentLoop:
         )
         papers = retrieval_result.payload["papers"]
         search_log = retrieval_result.payload["search_log"]
+        self._validate_skill(
+            "academic-retrieval",
+            "output",
+            self._to_contract_payload({"papers": papers, "search_log": search_log}),
+        )
         self.task_board.update(retrieval_task.id, status="completed", result_summary=retrieval_result.notes)
         self._trace(
             traces,
@@ -183,6 +233,17 @@ class PaperRankAgentLoop:
 
         # 3) Scorer
         self.task_board.update(score_task.id, status="in_progress")
+        self._validate_skill(
+            "evidence-grading",
+            "input",
+            self._to_contract_payload(
+                {
+                    "question": question,
+                    "papers": papers,
+                    "ingest_top_n": options.ingest_top_n,
+                }
+            ),
+        )
         scoring_result = await self.scorer.run(
             tools=self.tools,
             question=question,
@@ -190,6 +251,11 @@ class PaperRankAgentLoop:
             ingest_top_n=options.ingest_top_n,
         )
         scored_papers = scoring_result.payload
+        self._validate_skill(
+            "evidence-grading",
+            "output",
+            self._to_contract_payload({"scored_papers": scored_papers}),
+        )
         self.task_board.update(score_task.id, status="completed", result_summary=scoring_result.notes)
         self._trace(
             traces,
@@ -203,6 +269,17 @@ class PaperRankAgentLoop:
 
         # 4) Synthesis
         self.task_board.update(synth_task.id, status="in_progress")
+        self._validate_skill(
+            "synthesis",
+            "input",
+            self._to_contract_payload(
+                {
+                    "question": question,
+                    "plan": plan,
+                    "scored_papers": scored_papers,
+                }
+            ),
+        )
         synthesis_result = await self.synthesizer.run(
             tools=self.tools,
             question=question,
@@ -211,6 +288,13 @@ class PaperRankAgentLoop:
         )
         final_answer = synthesis_result.payload
         evidence_audit = synthesis_result.extra.get("evidence_audit", {})
+        self._validate_skill(
+            "synthesis",
+            "output",
+            self._to_contract_payload(
+                {"final_answer_markdown": final_answer, "evidence_audit": evidence_audit}
+            ),
+        )
         self.task_board.update(synth_task.id, status="completed", result_summary=synthesis_result.notes)
         self._trace(traces, "synthesis", "final synthesis generated", {"evidence_audit": evidence_audit})
 

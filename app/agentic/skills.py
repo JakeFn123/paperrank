@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+try:
+    from jsonschema import Draft202012Validator as _ContractValidator
+except Exception:
+    from jsonschema import Draft7Validator as _ContractValidator
 
 from app.config import BASE_DIR
 
@@ -14,6 +21,12 @@ class Skill:
     tags: list[str]
     body: str
     path: str
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+
+
+class SkillContractError(ValueError):
+    pass
 
 
 class SkillRegistry:
@@ -37,13 +50,34 @@ class SkillRegistry:
             description = (meta.get("description") or "No description").strip()
             raw_tags = (meta.get("tags") or "").strip()
             tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+            input_schema, output_schema = self._load_contract_schemas(file.parent)
             self._skills[name] = Skill(
                 name=name,
                 description=description,
                 tags=tags,
                 body=body.strip(),
                 path=str(file),
+                input_schema=input_schema,
+                output_schema=output_schema,
             )
+
+    def _load_contract_schemas(self, skill_dir: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        contract_file = skill_dir / "CONTRACT.json"
+        if not contract_file.exists():
+            return None, None
+        try:
+            payload = json.loads(contract_file.read_text(encoding="utf-8"))
+        except Exception:
+            return None, None
+        if not isinstance(payload, dict):
+            return None, None
+        input_schema = payload.get("input_schema")
+        output_schema = payload.get("output_schema")
+        if not isinstance(input_schema, dict):
+            input_schema = None
+        if not isinstance(output_schema, dict):
+            output_schema = None
+        return input_schema, output_schema
 
     def _parse_frontmatter(self, text: str) -> tuple[dict[str, str], str]:
         match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
@@ -79,3 +113,26 @@ class SkillRegistry:
             available = ", ".join(sorted(self._skills.keys())) or "none"
             return f"Error: unknown skill '{name}'. Available: {available}"
         return f"<skill name=\"{skill.name}\">\n{skill.body}\n</skill>"
+
+    def validate_input(self, name: str, payload: dict[str, Any]) -> None:
+        self._validate(name=name, payload=payload, phase="input")
+
+    def validate_output(self, name: str, payload: dict[str, Any]) -> None:
+        self._validate(name=name, payload=payload, phase="output")
+
+    def _validate(self, name: str, payload: dict[str, Any], phase: str) -> None:
+        skill = self.get(name)
+        if not skill:
+            return
+        schema = skill.input_schema if phase == "input" else skill.output_schema
+        if not schema:
+            return
+        validator = _ContractValidator(schema)
+        errors = list(validator.iter_errors(payload))
+        if not errors:
+            return
+        lines = []
+        for err in errors[:6]:
+            path = "/".join([str(p) for p in err.absolute_path]) or "<root>"
+            lines.append(f"{path}: {err.message}")
+        raise SkillContractError(f"Skill '{name}' {phase} contract validation failed: " + "; ".join(lines))

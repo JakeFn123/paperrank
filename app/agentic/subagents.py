@@ -132,6 +132,80 @@ class ScoringSubAgent(BaseSubAgent):
 
 @dataclass
 class SynthesisSubAgent(BaseSubAgent):
+    def _escape_md_cell(self, text: str, max_len: int = 120) -> str:
+        value = (text or "").replace("\n", " ").replace("|", "\\|").strip()
+        if len(value) > max_len:
+            return value[: max_len - 3] + "..."
+        return value
+
+    def _evidence_by_ref(self, payload: list[dict]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for row in payload:
+            ref = str(row.get("ref_id", "")).strip()
+            if not ref:
+                continue
+            evidence = row.get("evidence", []) or []
+            if evidence:
+                first = evidence[0] or {}
+                page = first.get("page", 1)
+                text = str(first.get("text", "") or "").strip()
+                if text:
+                    out[ref] = f"{text} [{ref} p.{page}]"
+                    continue
+            out[ref] = "无可用证据片段"
+        return out
+
+    def _collect_alignment_rows(self, answer: str, payload: list[dict]) -> list[tuple[str, str, str]]:
+        lines = (answer or "").splitlines()
+        in_key_section = False
+        bullets: list[str] = []
+        for line in lines:
+            striped = line.strip()
+            if striped.startswith("## "):
+                in_key_section = striped.startswith("## 证据支撑的关键结论")
+                continue
+            if in_key_section and striped.startswith("-"):
+                bullets.append(striped)
+
+        evidence_map = self._evidence_by_ref(payload)
+        rows: list[tuple[str, str, str]] = []
+        for bullet in bullets:
+            refs = sorted(set(re.findall(r"(P\d+)", bullet)))
+            if refs:
+                for ref in refs:
+                    rows.append((bullet.lstrip("- ").strip(), ref, evidence_map.get(ref, "无可用证据片段")))
+            else:
+                rows.append((bullet.lstrip("- ").strip(), "未标注引用", "无可用证据片段"))
+
+        if rows:
+            return rows[:12]
+
+        # Fallback: if model omitted key-conclusion bullets, build minimal rows from top papers.
+        for row in payload[:3]:
+            ref = str(row.get("ref_id", "")).strip() or "P?"
+            title = str(row.get("title", "")).strip() or "Untitled paper"
+            conclusion = f"论文《{title}》被纳入综合结论参考。"
+            rows.append((conclusion, ref, evidence_map.get(ref, "无可用证据片段")))
+        return rows
+
+    def _append_alignment_table(self, answer: str, payload: list[dict]) -> str:
+        if "## 结论-证据对齐表" in (answer or ""):
+            return answer
+        rows = self._collect_alignment_rows(answer, payload)
+        if not rows:
+            return answer
+
+        table_lines = [
+            "## 结论-证据对齐表",
+            "| 结论 | 引用 | 证据片段 |",
+            "|---|---|---|",
+        ]
+        for conclusion, ref, evidence in rows:
+            table_lines.append(
+                f"| {self._escape_md_cell(conclusion)} | {self._escape_md_cell(ref, 24)} | {self._escape_md_cell(evidence, 180)} |"
+            )
+        return (answer or "").rstrip() + "\n\n" + "\n".join(table_lines)
+
     def _build_evidence_audit(self, answer: str, payload: list[dict]) -> dict:
         ref_to_has_evidence = {}
         valid_refs = set()
@@ -237,6 +311,7 @@ class SynthesisSubAgent(BaseSubAgent):
             clarify = ["## 需你确认的问题"] + [f"- {q}" for q in plan.clarification_questions]
             answer = "\n".join(clarify) + "\n\n" + answer
 
+        answer = self._append_alignment_table(answer, payload)
         audit = self._build_evidence_audit(answer, payload)
         if not audit.get("passed", False):
             answer = self._append_audit_section(answer, audit)

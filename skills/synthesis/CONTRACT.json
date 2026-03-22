@@ -1,0 +1,43 @@
+{
+  "input_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["question", "plan", "scored_papers"],
+    "properties": {
+      "question": {"type": "string", "minLength": 1},
+      "plan": {
+        "type": "object",
+        "required": ["research_intent", "clarification_questions"],
+        "properties": {
+          "research_intent": {"type": "string"},
+          "clarification_questions": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      },
+      "scored_papers": {"type": "array", "items": {"type": "object"}}
+    },
+    "additionalProperties": true
+  },
+  "output_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["final_answer_markdown", "evidence_audit"],
+    "properties": {
+      "final_answer_markdown": {"type": "string", "minLength": 1},
+      "evidence_audit": {
+        "type": "object",
+        "required": ["passed", "confidence", "cited_refs"],
+        "properties": {
+          "passed": {"type": "boolean"},
+          "confidence": {"type": "string"},
+          "cited_refs": {"type": "array", "items": {"type": "string"}},
+          "invalid_refs": {"type": "array", "items": {"type": "string"}},
+          "missing_citation_lines": {"type": "array", "items": {"type": "string"}},
+          "refs_without_evidence": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": true
+      }
+    },
+    "additionalProperties": true
+  }
+}
