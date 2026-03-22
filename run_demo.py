@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -18,11 +19,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", type=str, default="all", choices=["all", "semantic_scholar", "arxiv"])
     parser.add_argument("--per-query-limit", type=int, default=6)
     parser.add_argument("--ingest-top-n", type=int, default=6)
+    parser.add_argument("--max-papers", type=int, default=30, help="Upper bound of candidate papers (hard-capped at 30).")
     parser.add_argument(
         "--locked-concepts",
         type=str,
         default="",
         help="Comma-separated concepts that must appear in generated sub-queries.",
+    )
+    parser.add_argument(
+        "--intent-slots-json",
+        type=str,
+        default="",
+        help='JSON string, e.g. {"subject":["llm agent"],"outcome":["efficiency"]}',
     )
     return parser
 
@@ -30,13 +38,23 @@ def build_parser() -> argparse.ArgumentParser:
 async def main() -> None:
     args = build_parser().parse_args()
     agent = PaperEvaluationAgent()
+    slots_override = {}
+    if args.intent_slots_json.strip():
+        try:
+            raw = json.loads(args.intent_slots_json)
+            if isinstance(raw, dict):
+                slots_override = {str(k): v for k, v in raw.items()}
+        except Exception:
+            slots_override = {}
     result = await agent.run(
         args.question,
         options=RunOptions(
             source=args.source,
             per_query_limit=args.per_query_limit,
             ingest_top_n=args.ingest_top_n,
+            max_papers=args.max_papers,
             locked_concepts=[x.strip() for x in args.locked_concepts.split(",") if x.strip()],
+            intent_slots_override=slots_override,
         ),
     )
 
@@ -45,6 +63,8 @@ async def main() -> None:
     print("子查询（英文检索词）:")
     for q in result.plan.sub_queries:
         print("-", q)
+    if result.plan.intent_slots:
+        print("意图槽位:", result.plan.intent_slots)
     if result.plan.hidden_assumptions:
         print("隐含前提:")
         for h in result.plan.hidden_assumptions:
@@ -59,12 +79,15 @@ async def main() -> None:
         s = sp.score
         print(f"{i}. {sp.paper.title[:100]}")
         print(
-            f"   total={s.total} | content={s.content_relevance} | method={s.method_relevance} "
+            f"   total={s.total} | rerank={sp.paper.rerank_score} | content={s.content_relevance} | method={s.method_relevance} "
             f"| timeliness={s.timeliness} | quality={s.quality_signal} | complementarity={s.complementarity}"
         )
 
     print("\n=== 综合结论 ===")
     print(result.final_answer_markdown)
+    if result.evidence_audit:
+        print("\n=== 证据审查 ===")
+        print(result.evidence_audit)
 
     if result.task_board_snapshot:
         print("\n=== Task System ===")

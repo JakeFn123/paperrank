@@ -12,7 +12,9 @@ class RunOptions:
     source: str = "all"
     per_query_limit: int = 6
     ingest_top_n: int = 6
+    max_papers: int = 30
     locked_concepts: list[str] | None = None
+    intent_slots_override: dict[str, list[str]] | None = None
 
 
 class PaperEvaluationAgent:
@@ -28,6 +30,8 @@ class PaperEvaluationAgent:
                 source=options.source,
                 per_query_limit=options.per_query_limit,
                 ingest_top_n=options.ingest_top_n,
+                max_papers=options.max_papers,
                 locked_concepts=options.locked_concepts or [],
+                intent_slots_override=options.intent_slots_override or {},
             ),
         )

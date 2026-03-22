@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class ResearchPlan(BaseModel):
     research_intent: str
+    intent_slots: dict[str, List[str]] = Field(default_factory=dict)
     sub_queries: List[str] = Field(default_factory=list)
     hidden_assumptions: List[str] = Field(default_factory=list)
     clarification_questions: List[str] = Field(default_factory=list)
@@ -24,6 +25,7 @@ class PaperRecord(BaseModel):
     paper_url: str = ""
     pdf_url: str = ""
     query_match_score: float = 0.0
+    rerank_score: float = 0.0
     concept_hit_count: int = 0
     matched_concepts: List[str] = Field(default_factory=list)
 
@@ -65,6 +67,16 @@ class PaperRecord(BaseModel):
     @field_validator("query_match_score", mode="before")
     @classmethod
     def _normalize_query_match_score(cls, value):
+        if value in (None, "", "null"):
+            return 0.0
+        try:
+            return float(value)
+        except Exception:
+            return 0.0
+
+    @field_validator("rerank_score", mode="before")
+    @classmethod
+    def _normalize_rerank_score(cls, value):
         if value in (None, "", "null"):
             return 0.0
         try:
@@ -134,5 +146,6 @@ class AgentOutput(BaseModel):
     search_log: List[dict]
     scored_papers: List[ScoredPaper]
     final_answer_markdown: str
+    evidence_audit: dict = Field(default_factory=dict)
     task_board_snapshot: List[dict] = Field(default_factory=list)
     loop_trace: List[dict] = Field(default_factory=list)

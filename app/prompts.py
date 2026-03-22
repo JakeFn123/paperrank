@@ -16,6 +16,13 @@ def build_decompose_prompt(question: str, subquery_count: int) -> str:
 只返回 JSON，格式如下：
 {{
   "research_intent": "...",
+  "intent_slots": {{
+    "subject": ["..."],
+    "intervention": ["..."],
+    "outcome": ["..."],
+    "context": ["..."],
+    "evaluation": ["..."]
+  }},
   "sub_queries": ["..."],
   "hidden_assumptions": ["..."],
   "clarification_questions": ["..."]
@@ -23,6 +30,7 @@ def build_decompose_prompt(question: str, subquery_count: int) -> str:
 
 约束：
 - sub_queries 必须使用英文技术短语，便于论文召回。
+- intent_slots 里每个槽位都尽量给出 1-3 个词组。
 - JSON 里除 sub_queries 外，其余字段默认用中文。
 - 不要输出 markdown。
 

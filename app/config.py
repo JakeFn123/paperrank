@@ -18,8 +18,11 @@ SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
 CHROMA_DIR = str((BASE_DIR / os.getenv("CHROMA_DIR", "data/chroma")).resolve())
 PDF_DIR = str((BASE_DIR / os.getenv("PDF_DIR", "data/pdfs")).resolve())
 
-SEARCH_TOP_K = int(os.getenv("SEARCH_TOP_K", "8"))
+SEARCH_TOP_K = int(os.getenv("SEARCH_TOP_K", "30"))
+SEARCH_RECALL_POOL = int(os.getenv("SEARCH_RECALL_POOL", "100"))
 SUBQUERY_COUNT = int(os.getenv("SUBQUERY_COUNT", "3"))
+RERANK_BACKEND = os.getenv("RERANK_BACKEND", "auto").lower()
+RERANK_MODEL = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 MCP_SERVER_PATH = str((BASE_DIR / "mcp_servers" / "academic_search_server.py").resolve())
 

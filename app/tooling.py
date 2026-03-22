@@ -7,10 +7,12 @@ import subprocess
 import sys
 import time
 from collections import defaultdict
+import math
 
 import httpx
 
-from app.config import MCP_SERVER_PATH, SEARCH_TOP_K
+from app.config import MCP_SERVER_PATH, SEARCH_RECALL_POOL, SEARCH_TOP_K
+from app.rerank import rerank_papers
 from app.schemas import PaperRecord
 
 
@@ -67,6 +69,13 @@ def _extract_terms(text: str) -> list[str]:
         if t not in uniq:
             uniq.append(t)
     return uniq
+
+
+def _simplify_query(query: str, max_terms: int = 10) -> str:
+    terms = _extract_terms(query)
+    if not terms:
+        return ""
+    return " ".join(terms[:max_terms]).strip()
 
 
 def _query_anchor_terms(question: str, sub_queries: list[str], locked_concepts: list[str]) -> set[str]:
@@ -284,7 +293,13 @@ def dedupe_papers(
     question: str,
     sub_queries: list[str],
     locked_concepts: list[str] | None = None,
+    top_k: int = SEARCH_TOP_K,
+    enforce_ui_cap: bool = True,
 ) -> list[PaperRecord]:
+    if enforce_ui_cap:
+        top_k = max(1, min(int(top_k or SEARCH_TOP_K), 30))
+    else:
+        top_k = max(1, min(int(top_k or SEARCH_TOP_K), 300))
     locked_concepts = locked_concepts or []
     bucket: dict[str, dict] = {}
     for raw in rows:
@@ -333,15 +348,17 @@ def dedupe_papers(
     )
     papers = [p for _, _, _, p in with_scores]
 
-    # Hard filter: if we have enough candidates with concept hits, drop zero-hit rows.
-    positive = [p for ch, _, _, p in with_scores if ch > 0]
-    if len(positive) >= min(SEARCH_TOP_K, 3):
-        papers = positive
+    # Hard filter: only enforce for small top_k modes.
+    # For larger candidate budgets (e.g., 30), keep tail candidates to preserve recall.
+    if top_k <= 10:
+        positive = [p for ch, _, _, p in with_scores if ch > 0]
+        if len(positive) >= min(top_k, 3):
+            papers = positive
 
     # If every row has zero relevance, fall back to citation/year.
     if with_scores and all(rel <= 0 for _, rel, _, _ in with_scores):
         papers.sort(key=lambda x: (x.citation_count, x.year or 0), reverse=True)
-    return papers[:SEARCH_TOP_K]
+    return papers[:top_k]
 
 
 async def search_via_mcp(
@@ -350,9 +367,15 @@ async def search_via_mcp(
     source: str = "all",
     per_query_limit: int = 6,
     locked_concepts: list[str] | None = None,
+    max_papers: int = SEARCH_TOP_K,
 ) -> tuple[list[PaperRecord], list[dict]]:
     logs: list[dict] = []
     collected: list[dict] = []
+    recall_target = max(max_papers, min(int(SEARCH_RECALL_POOL or 100), 200))
+    source_multiplier = 2 if str(source).lower().strip() == "all" else 1
+    subquery_count = max(1, len(sub_queries))
+    dynamic_limit = math.ceil(recall_target / (subquery_count * source_multiplier))
+    effective_limit = max(1, min(max(per_query_limit, dynamic_limit), 20))
 
     with ToolServerClient() as server:
         for q in sub_queries:
@@ -361,14 +384,46 @@ async def search_via_mcp(
                     "search_papers",
                     {
                         "query": q,
-                        "limit": per_query_limit,
+                        "limit": effective_limit,
                         "source": source,
                         "locked_concepts": locked_concepts or [],
                     },
                 )
                 if not isinstance(rows, list):
                     rows = []
-                logs.append({"query": q, "hits": len(rows), "source": source, "status": "ok"})
+
+                fallback_query = ""
+                fallback_hits = 0
+                if not rows:
+                    fallback_query = _simplify_query(q, max_terms=10)
+                    if fallback_query and fallback_query != q:
+                        try:
+                            retry_rows = server.call_tool(
+                                "search_papers",
+                                {
+                                    "query": fallback_query,
+                                    "limit": effective_limit,
+                                    "source": source,
+                                    "locked_concepts": locked_concepts or [],
+                                },
+                            )
+                            if isinstance(retry_rows, list) and retry_rows:
+                                rows = retry_rows
+                                fallback_hits = len(retry_rows)
+                        except Exception:
+                            pass
+                logs.append(
+                    {
+                        "query": q,
+                        "hits": len(rows),
+                        "source": source,
+                        "status": "ok",
+                        "requested_limit": per_query_limit,
+                        "effective_limit": effective_limit,
+                        "fallback_query": fallback_query,
+                        "fallback_hits": fallback_hits,
+                    }
+                )
             except Exception as exc:
                 rows = []
                 logs.append(
@@ -378,15 +433,39 @@ async def search_via_mcp(
                         "source": source,
                         "status": "error",
                         "error": str(exc),
+                        "requested_limit": per_query_limit,
+                        "effective_limit": effective_limit,
                     }
                 )
             collected.extend(rows)
 
-    papers = dedupe_papers(
+    recall_pool = dedupe_papers(
         collected,
         question=question,
         sub_queries=sub_queries,
         locked_concepts=locked_concepts or [],
+        top_k=recall_target,
+        enforce_ui_cap=False,
+    )
+    papers, rerank_info = rerank_papers(
+        question=question,
+        papers=recall_pool,
+        sub_queries=sub_queries,
+        locked_concepts=locked_concepts or [],
+        top_k=max_papers,
+    )
+    logs.append(
+        {
+            "query": "__postprocess__",
+            "hits": len(papers),
+            "source": "local",
+            "status": "ok",
+            "recall_target": recall_target,
+            "recall_after_dedupe": len(recall_pool),
+            "rerank_backend": rerank_info.get("backend", ""),
+            "rerank_model": rerank_info.get("model", ""),
+            "rerank_fallback": rerank_info.get("fallback_reason", ""),
+        }
     )
     return papers, logs
 

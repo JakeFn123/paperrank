@@ -18,7 +18,9 @@ class LoopOptions:
     source: str = "all"
     per_query_limit: int = 6
     ingest_top_n: int = 6
+    max_papers: int = 30
     locked_concepts: list[str] | None = None
+    intent_slots_override: dict[str, list[str]] | None = None
 
 
 class PaperRankAgentLoop:
@@ -92,7 +94,9 @@ class PaperRankAgentLoop:
                     "source": options.source,
                     "per_query_limit": options.per_query_limit,
                     "ingest_top_n": options.ingest_top_n,
+                    "max_papers": options.max_papers,
                     "locked_concepts": locked,
+                    "intent_slots_override": options.intent_slots_override or {},
                 },
             },
         )
@@ -137,14 +141,23 @@ class PaperRankAgentLoop:
 
         # 1) Planner
         self.task_board.update(plan_task.id, status="in_progress")
-        plan_result = self.planner.run(question=question, locked_concepts=locked, llm=self.llm)
+        plan_result = self.planner.run(
+            question=question,
+            locked_concepts=locked,
+            llm=self.llm,
+            intent_slots_override=options.intent_slots_override or {},
+        )
         plan = plan_result.payload
         self.task_board.update(plan_task.id, status="completed", result_summary=plan_result.notes)
         self._trace(
             traces,
             "planner",
             "question decomposition completed",
-            {"sub_queries": plan.sub_queries, "research_intent": plan.research_intent},
+            {
+                "sub_queries": plan.sub_queries,
+                "research_intent": plan.research_intent,
+                "intent_slots": plan.intent_slots,
+            },
         )
 
         # 2) Retriever
@@ -156,6 +169,7 @@ class PaperRankAgentLoop:
             source=options.source,
             per_query_limit=options.per_query_limit,
             locked_concepts=locked,
+            max_papers=options.max_papers,
         )
         papers = retrieval_result.payload["papers"]
         search_log = retrieval_result.payload["search_log"]
@@ -196,8 +210,9 @@ class PaperRankAgentLoop:
             scored_papers=scored_papers,
         )
         final_answer = synthesis_result.payload
+        evidence_audit = synthesis_result.extra.get("evidence_audit", {})
         self.task_board.update(synth_task.id, status="completed", result_summary=synthesis_result.notes)
-        self._trace(traces, "synthesis", "final synthesis generated")
+        self._trace(traces, "synthesis", "final synthesis generated", {"evidence_audit": evidence_audit})
 
         self.task_board.update(root.id, status="completed", result_summary="workflow completed")
         self._trace(traces, "loop", "root task completed", {"task_id": root.id})
@@ -208,6 +223,7 @@ class PaperRankAgentLoop:
             search_log=search_log,
             scored_papers=scored_papers,
             final_answer_markdown=final_answer,
+            evidence_audit=evidence_audit,
             task_board_snapshot=self.task_board.snapshot(),
             loop_trace=traces,
         )

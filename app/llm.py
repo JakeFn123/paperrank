@@ -194,9 +194,15 @@ class LLMGateway:
         )
         return response.output_text
 
-    def plan_question(self, question: str, locked_concepts: list[str] | None = None) -> ResearchPlan:
+    def plan_question(
+        self,
+        question: str,
+        locked_concepts: list[str] | None = None,
+        forced_intent_slots: dict[str, list[str]] | None = None,
+    ) -> ResearchPlan:
         locked = self._normalize_locked_concepts(locked_concepts or [])
         frame = self._build_intent_frame(question, locked)
+        frame = self._merge_forced_intent_slots(frame, forced_intent_slots or {})
         fallback_plan = self._rule_based_plan(question, frame, locked)
 
         if self.backend == "mock":
@@ -221,6 +227,7 @@ class LLMGateway:
 
         # Force intent text to stay aligned with extracted frame.
         plan.research_intent = self._build_research_intent(question, frame, locked)
+        plan.intent_slots = frame
         plan.sub_queries = self._enforce_locked_concepts(plan.sub_queries, locked)
         if len(plan.hidden_assumptions) < 2:
             plan.hidden_assumptions = self._build_assumptions(frame)
@@ -348,6 +355,42 @@ class LLMGateway:
             if value not in normalized:
                 normalized.append(value)
         return normalized
+
+    def _normalize_slot_values(self, values) -> list[str]:
+        if values is None:
+            return []
+        if not isinstance(values, list):
+            values = [values]
+        out: list[str] = []
+        for raw in values:
+            val = str(raw or "").strip().lower()
+            if not val:
+                continue
+            val = " ".join(val.split())
+            if val not in out:
+                out.append(val)
+        return out
+
+    def _merge_forced_intent_slots(
+        self,
+        frame: dict[str, list[str]],
+        forced_intent_slots: dict[str, list[str]],
+    ) -> dict[str, list[str]]:
+        merged: dict[str, list[str]] = {
+            "subject": list(frame.get("subject", [])),
+            "intervention": list(frame.get("intervention", [])),
+            "outcome": list(frame.get("outcome", [])),
+            "context": list(frame.get("context", [])),
+            "evaluation": list(frame.get("evaluation", [])),
+        }
+        allowed = {"subject", "intervention", "outcome", "context", "evaluation"}
+        for key, values in (forced_intent_slots or {}).items():
+            if key not in allowed:
+                continue
+            normalized_values = self._normalize_slot_values(values)
+            if normalized_values:
+                merged[key] = normalized_values
+        return merged
 
     def _build_intent_frame(self, question: str, locked_concepts: list[str] | None = None) -> dict[str, list[str]]:
         q_lower = (question or "").lower()
@@ -619,6 +662,7 @@ class LLMGateway:
 
         return ResearchPlan(
             research_intent=self._build_research_intent(question, frame, locked_concepts),
+            intent_slots=frame,
             sub_queries=queries,
             hidden_assumptions=self._build_assumptions(frame),
             clarification_questions=self._build_clarifications(frame),

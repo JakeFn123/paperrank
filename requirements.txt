@@ -7,3 +7,4 @@ pymupdf>=1.24.10
 streamlit>=1.39.0
 pydantic>=2.8.2
 eval_type_backport>=0.3.0
+sentence-transformers>=3.0.1

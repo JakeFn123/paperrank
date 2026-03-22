@@ -57,6 +57,7 @@ def build_paperrank_tool_registry(ctx: ToolContext) -> ToolRegistry:
         source: str,
         per_query_limit: int,
         locked_concepts: list[str],
+        max_papers: int,
     ) -> tuple[list[PaperRecord], list[dict]]:
         return await search_via_mcp(
             question=question,
@@ -64,6 +65,7 @@ def build_paperrank_tool_registry(ctx: ToolContext) -> ToolRegistry:
             source=source,
             per_query_limit=per_query_limit,
             locked_concepts=locked_concepts,
+            max_papers=max_papers,
         )
 
     def ingest_pdf(paper: PaperRecord) -> int:
