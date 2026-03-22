@@ -456,3 +456,26 @@ if st.session_state.last_result:
 
             st.markdown("**4) 评分理由（LLM 输出）**")
             st.write(sp.score.rationale)
+
+    st.subheader("Agent Loop / Task System")
+    task_board_snapshot = getattr(st.session_state.last_result, "task_board_snapshot", []) or []
+    loop_trace = getattr(st.session_state.last_result, "loop_trace", []) or []
+
+    if task_board_snapshot:
+        st.markdown("**任务看板（持久化任务系统）**")
+        st.dataframe(task_board_snapshot, use_container_width=True)
+    else:
+        st.info("当前运行未返回任务看板信息。")
+
+    if loop_trace:
+        st.markdown("**执行轨迹（Agent Loop）**")
+        st.dataframe(loop_trace, use_container_width=True)
+
+        config_rows = [x for x in loop_trace if x.get("stage") == "config"]
+        if config_rows:
+            details = config_rows[-1].get("details", {})
+            with st.expander("Tools / Skills 定义（本次运行）"):
+                st.markdown("**Tools**")
+                st.json(details.get("tools", []))
+                st.markdown("**Subagents + Skills**")
+                st.json(details.get("skills", []))

@@ -134,3 +134,5 @@ class AgentOutput(BaseModel):
     search_log: List[dict]
     scored_papers: List[ScoredPaper]
     final_answer_markdown: str
+    task_board_snapshot: List[dict] = Field(default_factory=list)
+    loop_trace: List[dict] = Field(default_factory=list)

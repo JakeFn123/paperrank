@@ -6,3 +6,5 @@ data/chroma/
 data/pdfs/
 .streamlit/
 .DS_Store
+.paperrank/tasks/*.json
+!.paperrank/tasks/.gitkeep

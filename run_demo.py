@@ -66,6 +66,19 @@ async def main() -> None:
     print("\n=== 综合结论 ===")
     print(result.final_answer_markdown)
 
+    if result.task_board_snapshot:
+        print("\n=== Task System ===")
+        for t in result.task_board_snapshot:
+            print(
+                f"- #{t['id']} [{t['status']}] {t['title']} "
+                f"(assignee={t['assignee']}) summary={t.get('result_summary', '')}"
+            )
+
+    if result.loop_trace:
+        print("\n=== Agent Loop Trace ===")
+        for row in result.loop_trace:
+            print(f"- {row.get('stage')}: {row.get('message')}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
