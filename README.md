@@ -4,6 +4,7 @@
 
 - Chinese User Manual: `docs/用户使用手册.md`
 - Retrieval & Scoring Deep Dive (CN): `docs/检索与评分系统详解.md`
+- Architecture Design Spec (CN): `docs/架构设计说明.md`
 
 This project implements the workflow defined in `论文搜索与综合评估智能体.docx`:
 
