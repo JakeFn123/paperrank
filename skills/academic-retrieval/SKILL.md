@@ -8,88 +8,109 @@ tags: retrieval,mcp,arxiv,semantic-scholar,rerank
 
 ## 技能说明
 
-该技能负责把 Planner 产出的 `sub_queries` 转化为高质量候选论文集，并保证检索过程可追踪、可解释。  
-技能核心是：**多源召回 + 后处理重排 + 日志审计**。
+该技能将 `sub_queries` 转化为高质量候选论文集，核心是“多源召回 + 后处理重排 + 日志审计”。
 
-## 适用场景
+## 触发条件（When to use）
 
-- 需要同时接入 arXiv 与 Semantic Scholar 进行论文召回。  
-- 需要将候选论文控制在 `<=30` 的可评估范围。  
-- 需要展示“为什么这篇论文被召回”。  
-- 需要应对 API 限流、0 命中、重复论文等常见问题。
+- 需要从 arXiv / Semantic Scholar 召回候选论文。
+- 需要结果可解释（为何被召回、为何排序靠前）。
+- 需要在 `<=30` 候选约束下保持召回率。
 
-## 输入与输出契约
+## 不适用边界（When NOT to use）
 
-### 输入
+- 用户已指定固定论文集合，仅做评分与总结。
+- 任务目标是全文事实核对（应走 evidence 流程而非仅检索）。
+- 用户要求离线无外部 API 调用。
+
+## 必要输入
 
 - `question`
 - `sub_queries`
-- `source`（`all/semantic_scholar/arxiv`）
+- `source`
 - `per_query_limit`
-- `max_papers`
+- `max_papers`（<=30）
 - `locked_concepts`
 
-### 输出
+## 工作模式决策
 
-- `papers: PaperRecord[]`（已去重、已打 `query_match_score` 与 `rerank_score`）
-- `search_log: list[dict]`（包含每个子查询 hits/status/source）
+1. `Broad Recall Mode`
+- 适用于探索类问题；强调召回池覆盖（默认 recall pool=100）。
+
+2. `Precision Mode`
+- 适用于强锁定概念问题；强调 lock hit 与 rerank 精排。
+
+3. `Fallback Mode`
+- API 429/0 命中时自动降级（简化查询、单源保底、lexical 重排）。
 
 ## 核心执行步骤
 
-### 阶段 1：子查询召回（MCP）
+### 阶段 1：多源召回
 
-1. 对每条子查询调用 `search_papers`。  
-2. 计算动态 `effective_limit`，目标形成 recall pool（默认约 100）。  
-3. 记录每次调用日志（requested/effective/hits/status）。
+- MCP 调用 `search_papers`；
+- 计算 `effective_limit`，动态拉高每个子查询召回量。
 
-### 阶段 2：0 命中回退
+### 阶段 2：0 命中重试
 
-1. 若子查询 0 命中，触发“简化查询重试”（保留前 10 个核心术语）。  
-2. 若重试成功，合并重试结果。  
-3. 将重试信息写入 `search_log`，避免黑盒检索。
+- 子查询无命中时，自动进行“简化查询重试”（前 10 个核心词）。
 
 ### 阶段 3：标准化与去重
 
-1. 统一字段类型（`None -> ""`, 数值转型）。  
-2. `paper_id` 去重，缺失时使用 `title+year+source` 稳定哈希。  
-3. 合并冲突字段（更长摘要、可用 URL 优先）。
+- 统一字段类型；
+- `paper_id` 或稳定哈希去重；
+- 合并摘要与 URL。
 
-### 阶段 4：匹配打分（召回解释分）
+### 阶段 4：召回解释打分
 
-1. 计算 `concept_hit_count` 与 `matched_concepts`。  
-2. 计算 `lock_match_count`（锁定概念命中数）。  
-3. 计算 `query_match_score` 并排序。
+- 计算 `concept_hit_count`、`matched_concepts`、`query_match_score`。
 
 ### 阶段 5：两阶段重排
 
-1. 对 recall pool 执行 rerank（Cross-Encoder 优先，失败回退 lexical）。  
-2. 写入 `rerank_score`。  
-3. 按 `max_papers` 截断（硬限制 `<=30`）。
+- recall pool -> Cross-Encoder（失败回退 lexical）-> top_k。
+- 写入 `rerank_score`。
 
-### 阶段 6：后处理审计日志
+### 阶段 6：日志审计
 
-增加 `query=__postprocess__` 日志项，至少包含：
-- `recall_target`
-- `recall_after_dedupe`
-- `rerank_backend`
-- `rerank_model`
-- `rerank_fallback`
+- 输出逐 query 日志 + `__postprocess__` 汇总日志。
 
-## 质量门禁（必须通过）
+## 质量门禁（量化）
 
-1. 返回论文条数 `<= max_papers` 且 `max_papers <= 30`。  
-2. 每篇论文必须带 `query_match_score`。  
-3. 重排阶段后每篇论文必须带 `rerank_score`。  
-4. `search_log` 必须有后处理记录（`__postprocess__`）。
+- 输出论文数 `<= max_papers <= 30`。
+- 每篇论文必须有 `query_match_score` 与 `rerank_score`。
+- `search_log` 必须包含 `__postprocess__`。
+- 若非全失败：`search_log` 至少 1 条 `status=ok`。
 
 ## 失败回退策略
 
-1. 单源失败时保留另一数据源结果。  
-2. Cross-Encoder 不可用时自动降级 lexical 重排。  
-3. 概念过滤导致空集时，允许部分匹配回退，避免零召回。
+- 单源失败：保留可用源结果。
+- Cross-Encoder 不可用：降级 lexical。
+- 概念过滤过严导致空集：回退部分匹配。
 
-## 最佳实践
+## 标准输出模板（Output Contract）
 
-1. `source=all` 作为默认，以提升召回鲁棒性。  
-2. `max_papers` 建议 20-30，兼顾覆盖与评分开销。  
-3. 对高精度问题配合 `locked_concepts` 与 `intent_slots` 使用。
+```json
+{
+  "papers": [
+    {
+      "paper_id": "...",
+      "title": "...",
+      "query_match_score": 0.0,
+      "rerank_score": 0.0,
+      "concept_hit_count": 0,
+      "matched_concepts": ["..."]
+    }
+  ],
+  "search_log": [
+    {"query": "...", "hits": 0, "source": "all", "status": "ok"},
+    {"query": "__postprocess__", "hits": 0, "source": "local", "status": "ok"}
+  ]
+}
+```
+
+## 最小样例
+
+输入：
+- `source=all`, `max_papers=30`, `locked_concepts=["reranker", "robustness"]`
+
+输出特征：
+- `papers` 中多数论文 `matched_concepts` 含 `Locked:*` 或相关概念；
+- `search_log` 末尾含 `__postprocess__`。

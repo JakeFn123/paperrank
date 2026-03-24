@@ -8,89 +8,104 @@ tags: planner,query,intent,decomposition,slots
 
 ## 技能说明
 
-该技能用于把用户研究问题从“自然语言描述”转成“可检索、可验证、可约束”的结构化计划。  
-它是检索质量的第一责任层，重点解决：
+该技能将用户研究问题从自然语言转为可检索、可验证、可约束的 `ResearchPlan`，是检索质量的第一责任层。
 
-1. 研究意图识别偏差。  
-2. 关键概念抽取不准。  
-3. 子查询与目标论文不相关。  
-4. 中英文输入导致的术语漂移。
+## 触发条件（When to use）
 
-## 适用场景
+- 用户输入开放式研究问题，需要自动拆解检索路径。
+- 用户提供锁定概念，希望系统围绕指定概念执行检索。
+- 需要在 UI 里编辑槽位后重跑，保持问题-检索一致性。
 
-- 用户输入一个复杂研究问题，希望自动拆解成检索子查询。  
-- 用户给出“人工锁定关键概念”，要求检索必须围绕这些概念。  
-- 需要在 UI 中手工编辑 `intent_slots` 后重跑。  
-- 需要输出“可审计”的问题理解结果。
+## 不适用边界（When NOT to use）
 
-## 输入与输出契约
+- 用户只要求对已有论文列表做评分或总结（应跳过拆解）。
+- 用户问题是单一精确查询（例如“找某篇已知论文”）。
+- 用户明确禁止改写原始查询。
 
-### 输入
+## 必要输入
 
-- `question`：用户研究问题（中英文均可）
-- `locked_concepts`：人工锁定概念列表（可空）
-- `forced_intent_slots`：人工覆盖槽位（可空）
+- `question: str`
+- `locked_concepts: list[str]`
+- `forced_intent_slots: dict[str, list[str]]`
 
-### 输出（ResearchPlan）
+## 工作模式决策
 
-- `research_intent`：中文研究目标定义
-- `intent_slots`：
-  - `subject`
-  - `intervention`
-  - `outcome`
-  - `context`
-  - `evaluation`
-- `sub_queries`：英文检索短语列表
-- `hidden_assumptions`：隐含前提
-- `clarification_questions`：需用户澄清问题
+1. `Hypothesis Validation`（是否/能否提升）
+- 优先输出“对象 + 方法 + 指标”结构，强调验证口径。
+
+2. `Method Design`（如何设计/优化）
+- 优先输出“机制 + 约束 + 代价”结构，强调可执行策略。
+
+3. `Comparative Evaluation`（A vs B）
+- 优先输出“对比对象 + 统一评测标准 + 场景边界”。
+
+4. `Mechanism Explanation`（为什么有效）
+- 优先输出“机制假设 + 失败模式 + 边界条件”。
 
 ## 核心执行步骤
 
 ### 阶段 1：问题归一化
 
-1. 清洗问题文本，去除无效噪声词。  
-2. 识别语言和关键术语（含大写缩写如 MCP、RAG、MDP）。  
-3. 归一化锁定概念（中英文别名映射到检索友好形式）。
+- 识别语言、缩写、核心技术词；
+- 归一化锁定概念（中英文别名映射到检索友好形式）。
 
-### 阶段 2：构建意图槽位（Intent Slots）
+### 阶段 2：构建意图槽位
 
-1. 从词典与规则提取 `subject/intervention/outcome/context/evaluation`。  
-2. 如果用户传入 `forced_intent_slots`，覆盖对应槽位。  
-3. 若槽位为空，使用保守默认值避免空计划。
+- 生成 `subject/intervention/outcome/context/evaluation`；
+- 若存在 `forced_intent_slots`，同名槽位强制覆盖。
 
-### 阶段 3：生成子查询
+### 阶段 3：子查询生成
 
-1. 基于槽位组合生成候选子查询。  
-2. 过滤空泛模板词，优先保留技术词与场景词。  
-3. 对每条子查询强制注入 `locked_concepts`（如有）。
+- 根据槽位组合英文技术子查询；
+- 强制注入锁定概念；
+- 清理空泛词和重复词。
 
 ### 阶段 4：相关性自检
 
-1. 检查子查询是否覆盖核心槽位。  
-2. 若覆盖不足，回退规则计划并重建。  
-3. 子查询数量按系统参数截断（默认 3）。
+- 计算槽位覆盖度；
+- 覆盖不足则回退规则模板重建子查询。
 
 ### 阶段 5：补全解释字段
 
-1. 生成 `research_intent`，明确目标、场景、指标、边界。  
-2. 生成 `hidden_assumptions` 与 `clarification_questions`。  
-3. 保证输出结构完整。
+- 输出 `research_intent`、`hidden_assumptions`、`clarification_questions`。
 
-## 质量门禁（必须通过）
+## 质量门禁（量化）
 
-1. 每条子查询必须是英文技术短语。  
-2. 若存在 `locked_concepts`，每条子查询都必须包含。  
-3. `intent_slots` 不能为空字典。  
-4. 子查询不能仅由泛词构成（如 review/method/systematic）。
+- 每条子查询必须是英文技术短语。
+- `sub_queries` 至少 1 条，默认目标 3 条。
+- 若 `locked_concepts` 非空：子查询锁定概念覆盖率 = 100%。
+- `intent_slots` 必须包含 5 个标准槽位键。
 
 ## 失败回退策略
 
-1. LLM 拆解异常时，使用规则拆解方案。  
-2. 子查询相关性不足时，按槽位模板重建。  
-3. 锁定概念冲突时，优先保留用户锁定概念并降级其他词。
+- LLM 拆解失败：回退规则模板。
+- 槽位覆盖不足：以 `forced_intent_slots` + 规则模板重建。
+- 锁定概念冲突：保留锁定概念，降级非核心术语。
 
-## 最佳实践
+## 标准输出模板（Output Contract）
 
-1. 优先用“对象 + 方法 + 指标 + 场景”提问。  
-2. 锁定概念建议 2-5 个，避免过窄导致零召回。  
-3. 对高约束场景，配合 `intent_slots` 手工编辑再重跑。
+```json
+{
+  "research_intent": "...",
+  "intent_slots": {
+    "subject": ["..."],
+    "intervention": ["..."],
+    "outcome": ["..."],
+    "context": ["..."],
+    "evaluation": ["..."]
+  },
+  "sub_queries": ["...", "...", "..."],
+  "hidden_assumptions": ["..."],
+  "clarification_questions": ["..."]
+}
+```
+
+## 最小样例
+
+输入：
+- `question`: 在企业知识库问答中，cross-encoder reranker 是否提升 RAG 稳定性？
+- `locked_concepts`: ["retrieval augmented generation", "reranker", "robustness"]
+
+输出特征：
+- `sub_queries` 每条都包含 `retrieval augmented generation / reranker / robustness`。
+- `intent_slots.outcome` 至少包含 `robustness`。
